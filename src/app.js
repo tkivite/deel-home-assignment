@@ -8,6 +8,33 @@ app.set("sequelize", sequelize);
 app.set("models", sequelize.models);
 
 /**
+ * @returns all contracts for a logged in user
+ */
+app.get("/contracts", getProfile, async (req, res) => {
+  const { Contract } = req.app.get("models");
+  const { id } = req.params;
+  const profileId = req.profile?.dataValues?.id;
+  const profileType = req.profile?.dataValues?.type;
+
+  let contracts = "";
+  try {
+    if (profileType === "client") {
+      contracts = await Contract.findAll({
+        where: { ClientId: profileId },
+      });
+    } else {
+      contracts = await Contract.findAll({
+        where: { ContractorId: profileId },
+      });
+    }
+
+    res.json(contracts);
+  } catch (error) {
+    console.error("Error fetching contracts:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+/**
  * FIXED!
  * @returns contract by id
  */
