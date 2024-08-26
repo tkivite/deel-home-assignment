@@ -63,4 +63,49 @@ app.get("/contracts/:id", getProfile, async (req, res) => {
   }
 });
 
+/**
+ *
+ * @returns jobs unpaid for a user
+ */
+app.get("/jobs/unpaid", getProfile, async (req, res) => {
+  const { Job, Contract } = req.app.get("models");
+
+  const profileId = req.profile?.dataValues?.id;
+  const profileType = req.profile?.dataValues?.type;
+
+  try {
+    let jobs = [];
+    if (profileType === "client") {
+      jobs = await Job.findAll({
+        where: { paid: false },
+        include: [
+          {
+            model: Contract,
+            where: {
+              ClientId: profileId,
+            },
+          },
+        ],
+      });
+    } else {
+      jobs = await Job.findAll({
+        where: { paid: false },
+        include: [
+          {
+            model: Contract,
+            where: {
+              ContractorId: profileId,
+            },
+          },
+        ],
+      });
+    }
+
+    res.json(jobs);
+  } catch (error) {
+    console.error("Error fetching jobs:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
 module.exports = app;
