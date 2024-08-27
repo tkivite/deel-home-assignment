@@ -226,8 +226,7 @@ app.post("/balances/deposit/:userId", async (req, res) => {
       (sum, job) => sum + job.price,
       0
     );
-    console.log(totalUnpaidAmount);
-    console.log(amount);
+
     // Check if the client wants to deposit more than 25% of total unpaid jobs
     const maxDepositAmount = Math.min(totalUnpaidAmount * 0.25, amount);
     console.log(maxDepositAmount);
@@ -251,62 +250,51 @@ app.post("/balances/deposit/:userId", async (req, res) => {
 });
 
 app.get("/admin/best-profession", async (req, res) => {
+  // Input validations
+  const startDate = new Date(req.query.start);
+  const endDate = new Date(req.query.end);
+
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    return res
+      .status(400)
+      .json({ error: "Invalid date format. Use ISO 8601." });
+  }
+  if (startDate > endDate) {
+    return res
+      .status(400)
+      .json({ error: "Start date must be before end date" });
+  }
+  // Best profession query
   try {
-    const { sequelize, Profile, Job } = req.app.get("models");
+    const result = await sequelize.query(
+      `
+    SELECT 
+      p.profession,
+      SUM(j.price) AS total_earned
+    FROM 
+      Profiles p
+    JOIN 
+      Contracts c ON p.id = c.ContractorId
+    JOIN 
+      Jobs j ON c.id = j.ContractId
+    WHERE 
+      j.paymentDate BETWEEN '${startDate.toISOString()}' AND '${endDate.toISOString()}'
+    GROUP BY 
+      p.profession
+    ORDER BY 
+      total_earned DESC
+    LIMIT 1;
+    `
+    );
 
-    // Parse dates from query parameters
-    const startDate = new Date(req.query.start);
-    const endDate = new Date(req.query.end);
-
-    // Validate input dates
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-      return res
-        .status(400)
-        .json({ error: "Invalid date format. Use ISO 8601." });
-    }
-    if (startDate > endDate) {
-      return res
-        .status(400)
-        .json({ error: "Start date must be before end date" });
-    }
-
-    // Find the profession with the highest earnings
-    const bestProfession = await Profile.findOne({
-      attributes: [
-        "profession",
-        [sequelize.fn("SUM", sequelize.col("jobs.price")), "totalEarnings"],
-      ],
-      group: "profession",
-      having: sequelize.and(
-        sequelize.where(
-          sequelize.fn("SUM", sequelize.col("jobs.price")),
-          ">",
-          0
-        ),
-        sequelize.where(
-          sequelize.fn("MAX", sequelize.col("jobs.paymentDate")),
-          ">=",
-          startDate
-        ),
-        sequelize.where(
-          sequelize.fn("MIN", sequelize.col("jobs.paymentDate")),
-          "<=",
-          endDate
-        )
-      ),
-      order: [[sequelize.literal("SUM(jobs.price)"), "DESC"]],
-      limit: 1,
-    });
-
-    if (!bestProfession) {
-      return res.status(404).json({
-        error: "No professions found within the specified date range",
-      });
-    }
+    const profession =
+      result[0].length > 0
+        ? result[0][0]
+        : { profession: "none", total_earned: 0 };
 
     res.json({
-      profession: bestProfession.profession,
-      totalEarnings: bestProfession.totalEarnings,
+      profession: profession.profession,
+      totalEarnings: profession.total_earned,
     });
   } catch (error) {
     console.error("Error fetching best profession:", error);
@@ -318,11 +306,12 @@ app.get("/admin/best-clients", async (req, res) => {
   try {
     const { Profile, Contract, Job } = req.app.get("models");
 
-    // Parse dates from query parameters
-    const startDate = new Date(req.query.start);
-    const endDate = new Date(req.query.end);
+    const { start, end, limit = 2 } = req.query;
 
-    // Validate input dates
+    // Input validations
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
       return res
         .status(400)
@@ -334,71 +323,49 @@ app.get("/admin/best-clients", async (req, res) => {
         .json({ error: "Start date must be before end date" });
     }
 
-    // Parse limit parameter
-    const limit = parseInt(req.query.limit || "2");
-
-    // Validate limit
     if (isNaN(limit) || limit <= 0) {
       return res
         .status(400)
         .json({ error: "Invalid limit. Must be a positive integer." });
     }
 
-    // Find the top clients based on total payments
-    const topClients = await Profile.findAll({
-      attributes: [
-        "firstName",
-        "lastName",
-        [sequelize.fn("SUM", sequelize.col("jobs.price")), "totalPayments"],
-      ],
-      group: "id",
-      having: sequelize.and(
-        sequelize.where(
-          sequelize.fn("SUM", sequelize.col("jobs.price")),
-          ">",
-          0
-        ),
-        sequelize.where(
-          sequelize.fn("MAX", sequelize.col("jobs.paymentDate")),
-          ">=",
-          startDate
-        ),
-        sequelize.where(
-          sequelize.fn("MIN", sequelize.col("jobs.paymentDate")),
-          "<=",
-          endDate
-        )
-      ),
-      include: [
-        {
-          model: Job,
-          as: "jobs",
-          through: Contract,
-          where: {
-            paid: true,
-          },
-        },
-      ],
-      order: [[sequelize.literal("SUM(jobs.price)"), "DESC"]],
-      limit: limit,
-    });
-
-    if (topClients.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "No clients found within the specified date range" });
-    }
-
-    res.json(
-      topClients.map((client) => ({
-        id: client.id,
-        firstName: client.firstName,
-        lastName: client.lastName,
-        totalPayments: client.totalPayments,
-      }))
+    // Best Clients query
+    const result = await sequelize.query(
+      `
+        
+    SELECT 
+    Profiles.id, 
+     firstName, 
+    lastName, 
+     SUM(Jobs.price) AS totalPaid
+   FROM 
+     Profiles
+   JOIN 
+     Contracts AS Client ON Profiles.id = Client.ClientId
+   JOIN 
+     Jobs ON Client.id = Jobs.ContractId
+   WHERE 
+     Jobs.paymentDate BETWEEN '${startDate.toISOString()}' AND '${endDate.toISOString()}'
+   GROUP BY 
+     Profiles.id
+   ORDER BY 
+     totalPaid DESC
+   LIMIT '${limit}';
+   `
     );
+
+    const bestClients = result[0].length > 0 ? result[0] : [];
+
+    // Format response
+    const formattedClients = bestClients.map((client) => ({
+      id: client.id,
+      fullName: `${client.firstName} ${client.lastName}`,
+      paid: client.totalPaid,
+    }));
+
+    res.json(formattedClients);
   } catch (error) {
-    console.error("Error fetching top clients:", error);
+    console.error("Error fetching best clients:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
