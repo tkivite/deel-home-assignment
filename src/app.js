@@ -2,7 +2,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const { sequelize } = require("./model");
 const { Op } = require("sequelize");
-const { getProfile } = require("./middleware/getProfile");
+const { getProfile, isAdmin } = require("./middleware/getProfile");
 const app = express();
 app.use(bodyParser.json());
 app.set("sequelize", sequelize);
@@ -171,7 +171,7 @@ app.post("/jobs/:job_id/pay", getProfile, async (req, res) => {
     );
 
     // update job to paid if price is settled
-    await job.update({ paid: true }, { transaction: t });
+
     await Job.update(
       {
         paid: true,
@@ -191,8 +191,8 @@ app.post("/jobs/:job_id/pay", getProfile, async (req, res) => {
 });
 
 /** deposit to a profile */
-app.post("/balances/deposit/:userId", async (req, res) => {
-  const { sequelize, Profile, Contract, Job } = req.app.get("models");
+app.post("/balances/deposit/:userId", getProfile, async (req, res) => {
+  const { Profile, Contract, Job } = req.app.get("models");
   const { userId } = req.params;
   const { amount } = req.body;
   const profile = await Profile.findOne({
@@ -200,12 +200,14 @@ app.post("/balances/deposit/:userId", async (req, res) => {
   });
 
   const clientProfile = profile?.dataValues;
+  console.log(clientProfile);
 
   try {
     // Check if  it's a client profile
     if (clientProfile?.type !== "client") {
       return res.status(400).json({ error: "Invalid client profile" });
     }
+    const allJobs = await Contract.findAll({});
 
     // Calculate the total amount of unpaid jobs
     const unpaidJobs = await Job.findAll({
@@ -229,7 +231,6 @@ app.post("/balances/deposit/:userId", async (req, res) => {
 
     // Check if the client wants to deposit more than 25% of total unpaid jobs
     const maxDepositAmount = Math.min(totalUnpaidAmount * 0.25, amount);
-    console.log(maxDepositAmount);
 
     // Validate the deposit amount
     if (maxDepositAmount < amount) {
@@ -238,9 +239,14 @@ app.post("/balances/deposit/:userId", async (req, res) => {
         .json({ error: "Deposit exceeds maximum allowed amount" });
     }
 
-    await clientProfile.update({
-      balance: sequelize.literal(`balance + ${req.body.amount}`),
-    });
+    await Profile.update(
+      {
+        balance: sequelize.literal(`balance + ${req.body.amount}`),
+      },
+      {
+        where: { id: clientProfile.id },
+      }
+    );
 
     res.json({ message: "Deposit processed successfully" });
   } catch (error) {
@@ -249,7 +255,9 @@ app.post("/balances/deposit/:userId", async (req, res) => {
   }
 });
 
-app.get("/admin/best-profession", async (req, res) => {
+//Admin Endpoints
+
+app.get("/admin/best-profession", isAdmin, async (req, res) => {
   // Input validations
   const startDate = new Date(req.query.start);
   const endDate = new Date(req.query.end);
@@ -302,7 +310,7 @@ app.get("/admin/best-profession", async (req, res) => {
   }
 });
 
-app.get("/admin/best-clients", async (req, res) => {
+app.get("/admin/best-clients", isAdmin, async (req, res) => {
   try {
     const { Profile, Contract, Job } = req.app.get("models");
 
